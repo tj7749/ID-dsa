@@ -1,0 +1,82 @@
+# GitLab CI/CD配置 - IDX-Keepalive 5分钟
+
+# 定义阶段
+stages:
+  - keepalive
+
+# 定义变量
+variables:
+  # 使用 GitLab CI/CD 变量存储配置信息，需要在GitLab项目设置中配置
+  # 设置 > CI/CD > 变量
+
+# 缓存配置
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"  # 基于分支名称的缓存键
+  paths:
+    - ~/.cache/pip/
+    - ~/.cache/ms-playwright/
+    - google_cookies.json
+
+# 定时任务
+workflow:
+  rules:
+    # 每5分钟运行一次（上午和傍晚时段）
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "five_min_morning"'
+    # 每5分钟运行一次（晚上时段）
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "five_min_night"'
+    # 允许手动触发
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+# 主要任务
+keepalive:
+  stage: keepalive
+  image: python:3.10-slim
+  script:
+    # 检查网址状态
+    - apt-get update && apt-get install -y curl
+    - export HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "${WEB_URL}")
+    - echo "WEB_URL status code: $HTTP_STATUS"
+    
+    # 如果状态码不是200，执行恢复操作
+    - |
+      if [ "$HTTP_STATUS" != "200" ]; then
+        # 下载Google Cookies
+        curl -s -L "${COOK_URL}" -o google_cookies.json
+        if [ -f google_cookies.json ]; then
+          echo "Successfully downloaded google_cookies.json"
+        else
+          echo "Error: Failed to download google_cookies.json"
+        fi
+        
+        # 创建playwright版本文件
+        if [ ! -f "playwright.version" ]; then
+          echo "1.34.0" > playwright.version
+        fi
+        
+        # 安装依赖
+        apt-get install -y wget gnupg
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+        apt-get install -y libgbm1 libasound2 libxss1 libatk1.0-0 libatk-bridge2.0-0 \
+          libxtst6 libdrm2 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+          libcups2 libxkbcommon0 libpango-1.0-0 libcairo2 libegl1 libglib2.0-0 \
+          libnspr4 libnss3 libnss3 xvfb
+        
+        python -m pip install --upgrade pip
+        
+        # 安装依赖项
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        else
+          pip install playwright
+        fi
+        
+        # 安装Playwright浏览器
+        python -m playwright install firefox
+        
+        # 运行Python脚本
+        python main.py
+      else
+        echo "URL is accessible, no need to run recovery script"
+      fi
+  rules:
+    - when: always
